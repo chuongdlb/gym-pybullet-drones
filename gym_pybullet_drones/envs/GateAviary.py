@@ -2,6 +2,7 @@ import numpy as np
 import pybullet as p
 import pkg_resources
 
+from gymnasium import spaces
 from gym_pybullet_drones.envs.BaseRLAviary import BaseRLAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType
 
@@ -281,6 +282,75 @@ class GateAviary(BaseRLAviary):
             return True
         
         return False
+
+    ################################################################################
+    
+    def _observationSpace(self):
+        """Returns the observation space of the environment.
+
+        Returns
+        -------
+        ndarray
+            A Box() of shape (NUM_DRONES,H,W,4) or (NUM_DRONES,12) depending on the observation type.
+
+        """
+        # Get the base observation space
+        base_space = super()._observationSpace()
+        
+        # If not kinematic, return base space (only KIN is modified for now)
+        if self.OBS_TYPE != ObservationType.KIN:
+            return base_space
+            
+        # Add 3 elements for the relative position to the next gate
+        lo = -np.inf
+        hi = np.inf
+        
+        # Extend the bounds
+        # Base space low/high are (NUM_DRONES, N)
+        extra_low = np.array([[lo, lo, lo] for _ in range(self.NUM_DRONES)])
+        extra_high = np.array([[hi, hi, hi] for _ in range(self.NUM_DRONES)])
+        
+        new_low = np.hstack([base_space.low, extra_low])
+        new_high = np.hstack([base_space.high, extra_high])
+        
+        return spaces.Box(low=new_low, high=new_high, dtype=np.float32)
+
+    ################################################################################
+
+    def _computeObs(self):
+        """Returns the current observation of the environment.
+
+        Returns
+        -------
+        ndarray
+            A Box() of shape (NUM_DRONES,H,W,4) or (NUM_DRONES,12) depending on the observation type.
+
+        """
+        # Get the base observation
+        obs = super()._computeObs()
+        
+        # If not kinematic, return base obs
+        if self.OBS_TYPE != ObservationType.KIN:
+            return obs
+            
+        # Calculate relative position to the next gate
+        gate_rel_pos = np.zeros((self.NUM_DRONES, 3))
+        
+        if self.next_gate_index < self.NUM_GATES:
+            target_gate_pos = self.gate_positions[self.next_gate_index]
+            
+            # Get drone position
+            state = self._getDroneStateVector(0)
+            drone_pos = state[0:3]
+            
+            # Relative vector (Target - Current)
+            gate_rel_pos[0, :] = target_gate_pos - drone_pos
+            
+        # Append to observation
+        # obs is (NUM_DRONES, N)
+        new_obs = np.hstack([obs, gate_rel_pos])
+        
+        return new_obs.astype('float32')
 
     ################################################################################
     
