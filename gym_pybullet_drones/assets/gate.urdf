@@ -1,0 +1,105 @@
+<?xml version="1.0" ?>
+<!-- Gate structure composed of simple boxes -->
+<robot name="gate">
+
+  <!-- Base link for the entire gate structure -->
+  <link name="base_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+  </link>
+
+  <!-- Left pillar -->
+  <link name="left_pillar">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.1 0.1 1.0" />
+      </geometry>
+      <material name="blue">
+        <color rgba="0 0 1 0.8" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.1 0.1 1.0" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Right pillar -->
+  <link name="right_pillar">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.1 0.1 1.0" />
+      </geometry>
+      <material name="blue">
+        <color rgba="0 0 1 0.8" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.1 0.1 1.0" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Top bar -->
+  <link name="top_bar">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="1.2 0.1 0.1" />
+      </geometry>
+      <material name="red">
+        <color rgba="1 0 0 0.8" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="1.2 0.1 0.1" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joints connecting pillars and top bar to a base link -->
+  <joint name="left_pillar_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="-0.55 0 0"/>
+    <parent link="base_link"/>
+    <child link="left_pillar"/>
+  </joint>
+
+  <joint name="right_pillar_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0.55 0 0"/>
+    <parent link="base_link"/>
+    <child link="right_pillar"/>
+  </joint>
+
+  <joint name="top_bar_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.45"/>
+    <parent link="base_link"/>
+    <child link="top_bar"/>
+  </joint>
+
+</robot>
