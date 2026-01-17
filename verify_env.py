@@ -1,60 +1,45 @@
-import gymnasium as gym
 import numpy as np
+import gymnasium as gym
 from gym_pybullet_drones.envs.GateAviary import GateAviary
-from gym_pybullet_drones.utils.enums import ObservationType
 
-def test_gate_aviary():
-    print("Initializing GateAviary...")
-    env = GateAviary(obs=ObservationType.KIN, gui=False, record=False)
+def verify():
+    # Create environment
+    env = GateAviary(gui=False, record=False)
     
-    # Check observation space dimensions
-    # Base observation is 12 + (ACTION_BUFFER_SIZE * 4)
-    # We added 3
-    base_size = 12 + (env.ACTION_BUFFER_SIZE * 4)
-    total_size = base_size + 3
-    expected_shape = (1, total_size)
+    print("Testing Gate Static Placement...")
     
-    print(f"Action Buffer Size: {env.ACTION_BUFFER_SIZE}")
-    print(f"Base Size: {base_size}")
-    print(f"Expected Total Size: {total_size}")
+    episode_positions = []
     
-    if env.observation_space.shape == expected_shape:
-        print(f"[PASS] Observation space shape matches expected: {expected_shape}")
-    else:
-        print(f"[FAIL] Observation space shape mismatch. Expected {expected_shape}, got {env.observation_space.shape}")
-    
-    # Reset env
-    print("\nResetting environment...")
-    obs, info = env.reset(seed=42)
-    
-    # Check observation shape
-    print("Observation shape:", obs.shape)
-    if obs.shape == expected_shape:
-        print("[PASS] Observation shape matches expected.")
-    else:
-        print(f"[FAIL] Observation shape mismatch. Got {obs.shape}")
+    num_episodes = 3
+    for i in range(num_episodes):
+        print(f"\nEpisode {i+1}:")
+        env.reset(seed=i)
         
-    # Check values
-    # Get ground truth
-    gate_pos = env.gate_positions[0]
-    state = env._getDroneStateVector(0)
-    drone_pos = state[0:3]
-    expected_rel_pos = gate_pos - drone_pos
-    
-    # Get obs values (last 3 elements)
-    obs_rel_pos = obs[0, -3:]
-    
-    print(f"\nGate Position: {gate_pos}")
-    print(f"Drone Position: {drone_pos}")
-    print(f"Expected Rel Pos: {expected_rel_pos}")
-    print(f"Observed Rel Pos: {obs_rel_pos}")
-    
-    if np.allclose(expected_rel_pos, obs_rel_pos, atol=1e-5):
-        print("[PASS] Relative position in observation is correct!")
-    else:
-        print("[FAIL] Relative position mismatch!")
+        gate_positions = np.array(env.gate_positions)
+        episode_positions.append(gate_positions)
         
+        print(f"  Gate 0 pos: {gate_positions[0]}")
+        
+    print("\nComparing Episodes...")
+    # Compare all episodes to the first one
+    all_match = True
+    base_pos = episode_positions[0]
+    for i in range(1, num_episodes):
+        diff = np.max(np.abs(episode_positions[i] - base_pos))
+        if diff > 1e-6:
+            print(f"  [FAIL] Episode {i+1} differs from Episode 1 by {diff}")
+            all_match = False
+        else:
+            print(f"  [PASS] Episode {i+1} matches Episode 1.")
+            
+    if all_match:
+        print("\n[SUCCESS] Track is fully static.")
+        
+    print("\nChecking Gate Parameters:")
+    print(f"  Passing Threshold: {env.GATE_PASSING_THRESHOLD}")
+    print(f"  Number of Gates: {env.NUM_GATES}")
+    
     env.close()
 
 if __name__ == "__main__":
-    test_gate_aviary()
+    verify()

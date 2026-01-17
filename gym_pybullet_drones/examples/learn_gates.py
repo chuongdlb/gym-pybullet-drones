@@ -44,7 +44,7 @@ DEFAULT_COLAB = False
 DEFAULT_RESUME_MODEL = None
 
 DEFAULT_OBS = ObservationType('kin') # 'kin' or 'rgb'
-DEFAULT_ACT = ActionType('rpm') # 'rpm' or 'pid' or 'vel' or 'one_d_rpm' or 'one_d_pid'
+DEFAULT_ACT = ActionType('pid') # 'rpm' or 'pid' or 'vel' or 'one_d_rpm' or 'one_d_pid'
 
 def run(output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True, resume_model_path=DEFAULT_RESUME_MODEL):
 
@@ -120,8 +120,8 @@ def run(output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=D
     # - Pass each gate: +100
     # - Pass all 3 gates: +200 bonus
     # - Smaller rewards for progress toward gates
-    # Target: Successfully pass all 3 gates
-    target_reward = 350.0  # Achievable when passing all 3 gates
+    # Target: Successfully pass all 5 gates
+    target_reward = 700.0  # (5 gates * 100) + 200 bonus
     
     callback_on_best = StopTrainingOnRewardThreshold(reward_threshold=target_reward,
                                                      verbose=1)

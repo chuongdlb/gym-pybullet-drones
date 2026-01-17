@@ -51,15 +51,18 @@ class GateAviary(BaseRLAviary):
             The type of action space (1 or 3D; RPMS, thurst and torques, or waypoint with PID control)
 
         """
-        self.EPISODE_LEN_SEC = 20
-        self.NUM_GATES = 3
+        self.EPISODE_LEN_SEC = 40 # Increased for 5 gates
+        self.NUM_GATES = 5
         self.GATE_IDS = []
         self.gate_positions = []
         self.gate_orientations = []
         self.gates_passed = []
         self.next_gate_index = 0
-        self.GATE_PASSING_THRESHOLD = 0.6  # Distance threshold to consider gate passed
+        self.GATE_PASSING_THRESHOLD = 0.4  # Reduced from 0.6 due to scaling
         
+        if initial_xyzs is None:
+            initial_xyzs = np.array([[0, 0, 0.5]]) # Start at 0.5m height to avoid ground collision
+            
         super().__init__(drone_model=drone_model,
                          num_drones=1,
                          initial_xyzs=initial_xyzs,
@@ -130,39 +133,60 @@ class GateAviary(BaseRLAviary):
         # Minimum distance between gates
         min_gate_distance = 1.5
         
-        for i in range(self.NUM_GATES):
-            # Keep trying until we find a valid position
-            max_attempts = 100
-            for attempt in range(max_attempts):
-                # Random position
-                x = np.random.uniform(min_x, max_x)
-                y = np.random.uniform(min_y, max_y)
-                z = np.random.uniform(min_z, max_z)
-                position = np.array([x, y, z])
-                
-                # Check distance from all previous gates
-                valid_position = True
-                for prev_pos in self.gate_positions:
-                    if np.linalg.norm(position - prev_pos) < min_gate_distance:
-                        valid_position = False
-                        break
-                
-                # Check distance from origin (drone start position)
-                if np.linalg.norm(position - np.array([0, 0, 0])) < 1.0:
-                    valid_position = False
-                
-                if valid_position:
-                    break
+        # Fix Z height for all gates 
+        gate_height = 1.0 # Static height
+        
+        # Figure-8 Track Generation
+        # Equation: x = A * sin(t), y = A * sin(t) * cos(t)
+        
+        scale_A = 2.0 
+        
+        # Static track - no random rotation
+        track_rotation_angle = 0.0
+        
+        # Distribute 5 gates along the path
+        # We avoid t=0 (start) to give drone some room
+        # Range t: [0.5, 2*pi - 0.5] roughly covers the track
+        t_values = np.linspace(0.5, 2 * np.pi - 0.5, self.NUM_GATES)
+        
+        for t in t_values:
+            # Parametric position (shape of 8)
+            # Using Lemniscate of Gerono: x = A sin(t), y = A sin(t) cos(t)
+            raw_x = scale_A * np.sin(t)
+            raw_y = scale_A * np.sin(t) * np.cos(t)
             
-            # Random orientation (yaw rotation)
-            yaw = np.random.uniform(0, 2 * np.pi)
-            orientation = p.getQuaternionFromEuler([0, 0, yaw])
+            # Apply global rotation to the track
+            rot_x = raw_x * np.cos(track_rotation_angle) - raw_y * np.sin(track_rotation_angle)
+            rot_y = raw_x * np.sin(track_rotation_angle) + raw_y * np.cos(track_rotation_angle)
+            
+            position = np.array([rot_x, rot_y, gate_height])
+            
+            # Calculate tangent vector for orientation
+            # Derivatives:
+            # dx/dt = A cos(t)
+            # dy/dt = A (cos^2(t) - sin^2(t)) = A cos(2t)
+            dx_dt = scale_A * np.cos(t)
+            dy_dt = scale_A * np.cos(2*t)
+            
+            # Rotate tangent vector by the same global rotation
+            rot_dx = dx_dt * np.cos(track_rotation_angle) - dy_dt * np.sin(track_rotation_angle)
+            rot_dy = dx_dt * np.sin(track_rotation_angle) + dy_dt * np.cos(track_rotation_angle)
+            
+            tangent_angle = np.arctan2(rot_dy, rot_dx)
+            
+            # Orient gate to be perpendicular to the path (facing the drone)
+            # Gate URDF is aligned along X-axis (width). We want X-axis to be perpendicular to tangent.
+            # Tangent angle is the direction of flight.
+            # We want gate Normal (Y-axis) to align with Tangent.
+            # So we rotate X-axis by Tangent - 90 degrees.
+            orientation = p.getQuaternionFromEuler([0, 0, tangent_angle - np.pi/2])
             
             # Load gate URDF
             gate_id = p.loadURDF(
                 pkg_resources.resource_filename('gym_pybullet_drones', 'assets/gate.urdf'),
                 position,
                 orientation,
+                globalScaling=0.5, # Scale down by 50%
                 physicsClientId=self.CLIENT
             )
             
@@ -186,16 +210,17 @@ class GateAviary(BaseRLAviary):
         
         reward = 0.0
         
-        # Reward for staying alive
-        reward += 0.1
+        # Reward for staying alive (REMOVED to prevent hovering)
+        # reward += 0.1
         
         # Check if drone passed through the next gate
         if self.next_gate_index < self.NUM_GATES:
             gate_pos = self.gate_positions[self.next_gate_index]
             distance_to_gate = np.linalg.norm(drone_pos - gate_pos)
             
-            # Reward for moving closer to the next gate
-            reward += max(0, (3.0 - distance_to_gate) * 0.5)
+            # Distance Penalty: Penalize being far from the gate
+            # This forces the drone to minimize distance to getting better rewards (close to 0)
+            reward -= distance_to_gate * 0.01
             
             # Check if drone passed through gate
             if not self.gates_passed[self.next_gate_index]:
@@ -215,10 +240,12 @@ class GateAviary(BaseRLAviary):
                 local_y = rel_pos[0] * sin_yaw + rel_pos[1] * cos_yaw
                 local_z = rel_pos[2]
                 
-                # Gate dimensions: width ~1.0m, height ~1.0m, thickness ~0.1m
+                # Gate dimensions (Approximate based on URDF and 0.5 scaling)
+                # Original: ~1.0m width/height. Scaled: ~0.5m.
+                # Valid region: +/- 0.25 ish
                 if (abs(local_x) < self.GATE_PASSING_THRESHOLD and 
-                    abs(local_y) < 0.55 and 
-                    abs(local_z) < 0.45):
+                    abs(local_y) < 0.25 and 
+                    abs(local_z) < 0.25):
                     # Passed through gate!
                     self.gates_passed[self.next_gate_index] = True
                     self.next_gate_index += 1
@@ -227,14 +254,52 @@ class GateAviary(BaseRLAviary):
                     # Extra reward for passing all gates
                     if self.next_gate_index >= self.NUM_GATES:
                         reward += 200.0
+            
+            # Progress Reward: Speed towards the goal
+            # Project velocity vector onto the direction to the gate
+            vel = state[10:13]
+            if np.linalg.norm(vel) > 0.1:
+                direction_to_gate = gate_pos - drone_pos
+                dist = np.linalg.norm(direction_to_gate)
+                if dist > 0:
+                    dir_normalized = direction_to_gate / dist
+                    vel_towards_gate = np.dot(vel, dir_normalized)
+                    # Reward for speed towards gate, but cap it to avoid exploitation
+                    reward += vel_towards_gate * 0.1
+            
+            # Time penalty to encourage speed (Reduced to prevent panic)
+            reward -= 0.01 
+            
+            # Facing Reward: Encourage pointing usage towards the goal
+            # This helps the drone filter out actions that turn it away
+            # Quaternion is at state[3:7]
+            rotation = np.array(p.getMatrixFromQuaternion(state[3:7])).reshape(3, 3)
+            heading_vector = rotation[:, 0] # Body X-axis
+            
+            direction_to_gate = gate_pos - drone_pos
+            dist = np.linalg.norm(direction_to_gate)
+            if dist > 0:
+                dir_normalized = direction_to_gate / dist
+                # Reward for facing the gate
+                heading_dot = np.dot(heading_vector, dir_normalized)
+                reward += heading_dot * 0.05 
+
+            # Penalty for flying too high above the target gate
+            # The gate center is at gate_pos. The gate height is roughly 1m (frame size).
+            # If drone is significantly higher than gate center + 0.5, apply penalty.
+            z_diff = drone_pos[2] - gate_pos[2]
+            if z_diff > 0.5: 
+                # drone is above the top rim of the gate (assuming gate is ~1m tall centered at Z)
+                reward -= z_diff * 1.0 # Tune this coefficient as needed
         
-        # Penalty for tilting too much
-        if abs(state[7]) > 0.5 or abs(state[8]) > 0.5:
-            reward -= 1.0
+        # Penalty for tilting too much (Relaxed)
+        # REMOVED intermediate penalty to prevent early termination "suicide"
+        # if abs(state[7]) > 1.0 or abs(state[8]) > 1.0:
+        #    reward -= 1.0
         
         # Penalty for going out of bounds
         if abs(drone_pos[0]) > 3 or abs(drone_pos[1]) > 3 or drone_pos[2] < 0.1 or drone_pos[2] > 2.5:
-            reward -= 2.0
+            reward -= 10.0 # Increased from -2.0 to prevent "suicide" strategies
         
         return reward
 
@@ -271,14 +336,17 @@ class GateAviary(BaseRLAviary):
         # Truncate when the drone is too far away
         if (abs(state[0]) > 3.5 or abs(state[1]) > 3.5 or 
             state[2] > 3.0 or state[2] < 0.05):
+            # print(f"[DEBUG] Truncated: Bounds/Ground (Pos: {state[0:3]})")
             return True
         
-        # Truncate when the drone is too tilted
-        if abs(state[7]) > 0.8 or abs(state[8]) > 0.8:
+        # Truncate when the drone is too tilted (Relaxed for racing)
+        if abs(state[7]) > 1.5 or abs(state[8]) > 1.5:
+            # print(f"[DEBUG] Truncated: Tilt (Roll: {state[7]:.2f}, Pitch: {state[8]:.2f})")
             return True
         
         # Truncate on timeout
         if self.step_counter/self.PYB_FREQ > self.EPISODE_LEN_SEC:
+            # print("[DEBUG] Truncated: Timeout") # Less important
             return True
         
         return False
