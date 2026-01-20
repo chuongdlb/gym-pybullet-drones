@@ -51,14 +51,18 @@ class GateAviary(BaseRLAviary):
             The type of action space (1 or 3D; RPMS, thurst and torques, or waypoint with PID control)
 
         """
-        self.EPISODE_LEN_SEC = 40 # Increased for 5 gates
-        self.NUM_GATES = 5
+        self.EPISODE_LEN_SEC = 40 # Increased for 6 gates
+        self.NUM_GATES = 6  # Changed from 5 to 6 gates
         self.GATE_IDS = []
         self.gate_positions = []
         self.gate_orientations = []
         self.gates_passed = []
         self.next_gate_index = 0
         self.GATE_PASSING_THRESHOLD = 0.4  # Reduced from 0.6 due to scaling
+        
+        # Track randomization parameters
+        self.track_scale_A = None  # Will be randomized per episode
+        self.track_rotation_angle = None  # Will be randomized per episode
         
         if initial_xyzs is None:
             initial_xyzs = np.array([[0, 0, 0.5]]) # Start at 0.5m height to avoid ground collision
@@ -125,39 +129,40 @@ class GateAviary(BaseRLAviary):
         if hasattr(self, '_seed'):
             np.random.seed(self._seed)
         
-        # Define spawn area boundaries
-        min_x, max_x = -2, 2
-        min_y, max_y = -2, 2
-        min_z, max_z = 0.7, 1.5
+        # Track randomization for generalization
+        # Randomize scale factor per episode (range 1.5 to 2.5)
+        self.track_scale_A = np.random.uniform(1.5, 2.5)
         
-        # Minimum distance between gates
-        min_gate_distance = 1.5
+        # Randomize track rotation angle per episode (0 to 2π)
+        self.track_rotation_angle = np.random.uniform(0, 2 * np.pi)
         
         # Fix Z height for all gates 
         gate_height = 1.0 # Static height
         
         # Figure-8 Track Generation
         # Equation: x = A * sin(t), y = A * sin(t) * cos(t)
+        # Using Lemniscate of Gerono with randomized A and rotation
         
-        scale_A = 2.0 
-        
-        # Static track - no random rotation
-        track_rotation_angle = 0.0
-        
-        # Distribute 5 gates along the path
-        # We avoid t=0 (start) to give drone some room
-        # Range t: [0.5, 2*pi - 0.5] roughly covers the track
-        t_values = np.linspace(0.5, 2 * np.pi - 0.5, self.NUM_GATES)
+        # Distribute 6 gates evenly along the figure-8 path (t from 0 to 2π)
+        t_values = np.linspace(0, 2 * np.pi, self.NUM_GATES, endpoint=False)
         
         for t in t_values:
             # Parametric position (shape of 8)
             # Using Lemniscate of Gerono: x = A sin(t), y = A sin(t) cos(t)
-            raw_x = scale_A * np.sin(t)
-            raw_y = scale_A * np.sin(t) * np.cos(t)
+            raw_x = self.track_scale_A * np.sin(t)
+            raw_y = self.track_scale_A * np.sin(t) * np.cos(t)
             
             # Apply global rotation to the track
-            rot_x = raw_x * np.cos(track_rotation_angle) - raw_y * np.sin(track_rotation_angle)
-            rot_y = raw_x * np.sin(track_rotation_angle) + raw_y * np.cos(track_rotation_angle)
+            cos_rot = np.cos(self.track_rotation_angle)
+            sin_rot = np.sin(self.track_rotation_angle)
+            rot_x = raw_x * cos_rot - raw_y * sin_rot
+            rot_y = raw_x * sin_rot + raw_y * cos_rot
+            
+            # Add small Gaussian noise to gate positions for robustness
+            noise_x = np.random.normal(0, 0.05)
+            noise_y = np.random.normal(0, 0.05)
+            rot_x += noise_x
+            rot_y += noise_y
             
             position = np.array([rot_x, rot_y, gate_height])
             
@@ -165,12 +170,12 @@ class GateAviary(BaseRLAviary):
             # Derivatives:
             # dx/dt = A cos(t)
             # dy/dt = A (cos^2(t) - sin^2(t)) = A cos(2t)
-            dx_dt = scale_A * np.cos(t)
-            dy_dt = scale_A * np.cos(2*t)
+            dx_dt = self.track_scale_A * np.cos(t)
+            dy_dt = self.track_scale_A * np.cos(2*t)
             
             # Rotate tangent vector by the same global rotation
-            rot_dx = dx_dt * np.cos(track_rotation_angle) - dy_dt * np.sin(track_rotation_angle)
-            rot_dy = dx_dt * np.sin(track_rotation_angle) + dy_dt * np.cos(track_rotation_angle)
+            rot_dx = dx_dt * cos_rot - dy_dt * sin_rot
+            rot_dy = dx_dt * sin_rot + dy_dt * cos_rot
             
             tangent_angle = np.arctan2(rot_dy, rot_dx)
             
@@ -207,11 +212,9 @@ class GateAviary(BaseRLAviary):
         """
         state = self._getDroneStateVector(0)
         drone_pos = state[0:3]
+        vel = state[10:13]
         
         reward = 0.0
-        
-        # Reward for staying alive (REMOVED to prevent hovering)
-        # reward += 0.1
         
         # Check if drone passed through the next gate
         if self.next_gate_index < self.NUM_GATES:
@@ -219,7 +222,7 @@ class GateAviary(BaseRLAviary):
             distance_to_gate = np.linalg.norm(drone_pos - gate_pos)
             
             # Distance Penalty: Penalize being far from the gate
-            # This forces the drone to minimize distance to getting better rewards (close to 0)
+            # Tuned for racing - encourage progressive movement
             reward -= distance_to_gate * 0.01
             
             # Check if drone passed through gate
@@ -249,28 +252,34 @@ class GateAviary(BaseRLAviary):
                     # Passed through gate!
                     self.gates_passed[self.next_gate_index] = True
                     self.next_gate_index += 1
-                    reward += 100.0  # Big reward for passing gate
+                    reward += 150.0  # Increased from 100 for 6 gates
                     
                     # Extra reward for passing all gates
                     if self.next_gate_index >= self.NUM_GATES:
                         reward += 200.0
             
+            # Velocity Magnitude Bonus: Reward for high speed through gates
+            # Encourage fast racing
+            speed = np.linalg.norm(vel)
+            if speed > 0.5:  # Only reward significant speed
+                reward += speed * 0.2
+            
             # Progress Reward: Speed towards the goal
             # Project velocity vector onto the direction to the gate
-            vel = state[10:13]
             if np.linalg.norm(vel) > 0.1:
                 direction_to_gate = gate_pos - drone_pos
                 dist = np.linalg.norm(direction_to_gate)
                 if dist > 0:
                     dir_normalized = direction_to_gate / dist
                     vel_towards_gate = np.dot(vel, dir_normalized)
-                    # Reward for speed towards gate, but cap it to avoid exploitation
+                    # Reward for speed towards gate
                     reward += vel_towards_gate * 0.1
             
-            # Time penalty to encourage speed (Reduced to prevent panic)
-            reward -= 0.01 
+            # Time penalty to encourage speed (INCREASED from -0.01 to -0.05)
+            # This is key for racing - penalizes slow completion
+            reward -= 0.05
             
-            # Facing Reward: Encourage pointing usage towards the goal
+            # Facing Reward: Encourage pointing towards the goal
             # This helps the drone filter out actions that turn it away
             # Quaternion is at state[3:7]
             rotation = np.array(p.getMatrixFromQuaternion(state[3:7])).reshape(3, 3)
@@ -289,13 +298,8 @@ class GateAviary(BaseRLAviary):
             # If drone is significantly higher than gate center + 0.5, apply penalty.
             z_diff = drone_pos[2] - gate_pos[2]
             if z_diff > 0.5: 
-                # drone is above the top rim of the gate (assuming gate is ~1m tall centered at Z)
-                reward -= z_diff * 1.0 # Tune this coefficient as needed
-        
-        # Penalty for tilting too much (Relaxed)
-        # REMOVED intermediate penalty to prevent early termination "suicide"
-        # if abs(state[7]) > 1.0 or abs(state[8]) > 1.0:
-        #    reward -= 1.0
+                # drone is above the top rim of the gate
+                reward -= z_diff * 1.0
         
         # Penalty for going out of bounds
         if abs(drone_pos[0]) > 3 or abs(drone_pos[1]) > 3 or drone_pos[2] < 0.1 or drone_pos[2] > 2.5:
@@ -369,14 +373,19 @@ class GateAviary(BaseRLAviary):
         if self.OBS_TYPE != ObservationType.KIN:
             return base_space
             
-        # Add 3 elements for the relative position to the next gate
+        # Add extended observation for racing:
+        # - Next gate position: 3 dims
+        # - Gate+1 position (lookahead): 3 dims
+        # - Velocity magnitude: 1 dim
+        # - Time-in-episode: 1 dim
+        # Total: 8 additional dimensions
         lo = -np.inf
         hi = np.inf
         
         # Extend the bounds
         # Base space low/high are (NUM_DRONES, N)
-        extra_low = np.array([[lo, lo, lo] for _ in range(self.NUM_DRONES)])
-        extra_high = np.array([[hi, hi, hi] for _ in range(self.NUM_DRONES)])
+        extra_low = np.array([[lo]*8 for _ in range(self.NUM_DRONES)])
+        extra_high = np.array([[hi]*8 for _ in range(self.NUM_DRONES)])
         
         new_low = np.hstack([base_space.low, extra_low])
         new_high = np.hstack([base_space.high, extra_high])
@@ -401,22 +410,34 @@ class GateAviary(BaseRLAviary):
         if self.OBS_TYPE != ObservationType.KIN:
             return obs
             
-        # Calculate relative position to the next gate
-        gate_rel_pos = np.zeros((self.NUM_DRONES, 3))
+        # Calculate extended observations for racing
+        extended_obs = np.zeros((self.NUM_DRONES, 8))
         
+        # Get drone state
+        state = self._getDroneStateVector(0)
+        drone_pos = state[0:3]
+        vel = state[10:13]
+        
+        # Next gate relative position (3 dims)
         if self.next_gate_index < self.NUM_GATES:
             target_gate_pos = self.gate_positions[self.next_gate_index]
-            
-            # Get drone position
-            state = self._getDroneStateVector(0)
-            drone_pos = state[0:3]
-            
-            # Relative vector (Target - Current)
-            gate_rel_pos[0, :] = target_gate_pos - drone_pos
+            extended_obs[0, 0:3] = target_gate_pos - drone_pos
+        
+        # Lookahead: Gate+1 relative position (3 dims)
+        if self.next_gate_index + 1 < self.NUM_GATES:
+            lookahead_gate_pos = self.gate_positions[self.next_gate_index + 1]
+            extended_obs[0, 3:6] = lookahead_gate_pos - drone_pos
+        
+        # Velocity magnitude (1 dim) - helps drone learn speed control
+        extended_obs[0, 6] = np.linalg.norm(vel)
+        
+        # Time-in-episode (1 dim) - normalized to [0, 1]
+        time_in_episode = self.step_counter / (self.EPISODE_LEN_SEC * self.CTRL_FREQ)
+        extended_obs[0, 7] = min(time_in_episode, 1.0)
             
         # Append to observation
         # obs is (NUM_DRONES, N)
-        new_obs = np.hstack([obs, gate_rel_pos])
+        new_obs = np.hstack([obs, extended_obs])
         
         return new_obs.astype('float32')
 

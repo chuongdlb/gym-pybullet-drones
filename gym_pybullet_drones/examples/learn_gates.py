@@ -53,12 +53,12 @@ def run(output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=D
         os.makedirs(filename+'/')
 
     # Use limited parallel environments for better performance with PyBullet
-    # PyBullet physics simulation doesn't parallelize well, so use fewer envs
-    num_envs = min(4, multiprocessing.cpu_count())  # Use max 4 parallel envs
+    # PyBullet physics simulation doesn't parallelize well on Windows
+    num_envs = min(2, multiprocessing.cpu_count())  # Reduced to 2 for Windows stability
     print(f'[INFO] Using {num_envs} parallel environments')
 
-    # Create training environment with DummyVecEnv for stable PyBullet performance
-    # DummyVecEnv runs environments sequentially but is more stable with PyBullet
+    # Create training environment with DummyVecEnv (better compatibility with Windows)
+    # DummyVecEnv runs environments in same process but with vectorization
     train_env = make_vec_env(GateAviary,
                              env_kwargs=dict(obs=DEFAULT_OBS, act=DEFAULT_ACT),
                              n_envs=num_envs,
@@ -116,12 +116,12 @@ def run(output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=D
                     verbose=1)
 
     #### Target cumulative rewards (problem-dependent) ##########
-    # Reward structure: 
-    # - Pass each gate: +100
-    # - Pass all 3 gates: +200 bonus
-    # - Smaller rewards for progress toward gates
-    # Target: Successfully pass all 5 gates
-    target_reward = 700.0  # (5 gates * 100) + 200 bonus
+    # Reward structure for 6 gates with racing focus: 
+    # - Pass each gate: +150
+    # - Pass all 6 gates: +200 bonus
+    # - Speed and progress rewards
+    # Target: Successfully pass all 6 gates with racing optimization
+    target_reward = 1100.0  # (6 gates * 150) + 200 bonus + speed/progress rewards
     
     callback_on_best = StopTrainingOnRewardThreshold(reward_threshold=target_reward,
                                                      verbose=1)
@@ -139,8 +139,9 @@ def run(output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=D
     print(f'[INFO] Models will be saved to: {filename}/')
     print(f'[INFO] Evaluation every {eval_callback.eval_freq} steps ({eval_callback.eval_freq * num_envs} timesteps)')
     print(f'[INFO] Best model will be saved when performance improves')
+    print(f'[INFO] Target reward threshold: {target_reward}')
     
-    model.learn(total_timesteps=int(1e7) if local else int(1e2), # shorter training in GitHub Actions pytest
+    model.learn(total_timesteps=int(2e6) if local else int(1e2), # 2M steps for first iteration with racing
                 callback=eval_callback,
                 log_interval=100)
 
