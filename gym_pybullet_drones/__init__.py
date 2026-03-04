@@ -24,3 +24,8 @@ register(
     id='gate-aviary-v0',
     entry_point='gym_pybullet_drones.envs:GateAviary',
 )
+
+register(
+    id='denseforest-aviary-v0',
+    entry_point='gym_pybullet_drones.envs:DenseForestAviary',
+)
