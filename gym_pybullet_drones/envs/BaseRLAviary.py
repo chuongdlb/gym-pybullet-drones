@@ -162,15 +162,11 @@ class BaseRLAviary(BaseAviary):
                           ):
         """Pre-processes the action passed to `.step()` into motors' RPMs.
 
-        Parameter `action` is processed differenly for each of the different
+        Parameter `action` is processed differently for each of the different
         action types: the input to n-th drone, `action[n]` can be of length
-        1, 3, or 4, and represent RPMs, desired thrust and torques, or the next
-        target position to reach using PID control.
-
-        Parameter `action` is processed differenly for each of the different
-        action types: `action` can be of length 1, 3, or 4 and represent 
-        RPMs, desired thrust and torques, the next target position to reach 
-        using PID control, a desired velocity vector, etc.
+        1, 3, or 4, and represent RPMs, desired thrust and torques, or a
+        position offset from the current position to reach using PID control
+        (0.15m per unit action).
 
         Parameters
         ----------
@@ -194,7 +190,7 @@ class BaseRLAviary(BaseAviary):
                 state = self._getDroneStateVector(k)
                 next_pos = self._calculateNextStep(
                     current_position=state[0:3],
-                    destination=target,
+                    destination=state[0:3] + 0.15 * target,
                     step_size=1,
                     )
                 rpm_k, _, _ = self.ctrl[k].computeControl(control_timestep=self.CTRL_TIMESTEP,
